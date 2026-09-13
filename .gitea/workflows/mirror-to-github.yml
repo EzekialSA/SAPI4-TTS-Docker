@@ -1,0 +1,85 @@
+name: Mirror to GitHub
+
+# Publishes a BINARY-FREE copy of this repo to GitHub.
+#
+# The four vendored 1998 installers are proprietary abandonware and are NOT
+# redistributed. Each is replaced by a <name>.exe.txt placeholder naming the
+# file and linking to where it came from. mirror_prepare.py aborts the run if
+# any .exe/.dll/.msi would reach the mirror, so a new binary added to this repo
+# fails the job rather than leaking.
+#
+# History is intentionally NOT preserved: this repo's git objects contain the
+# binaries, so mirroring history would publish them. The mirror is a rolling
+# snapshot pushed with --force.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ensure tooling
+        run: |
+          command -v git >/dev/null || (apt-get update -qq && apt-get install -y -qq git)
+          command -v python3 >/dev/null || (apt-get update -qq && apt-get install -y -qq python3)
+          git --version && python3 --version
+
+      - name: Clone the GitHub mirror
+        env:
+          GH_PAT_TOKEN: ${{ secrets.GH_PAT_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${GH_PAT_TOKEN:-}" ]; then
+            echo "::error::GH_PAT_TOKEN secret is not set on this repo"
+            exit 1
+          fi
+          rm -rf /tmp/mirror
+          # An uninitialised repo clones as an empty tree with a warning.
+          git clone "https://x-access-token:${GH_PAT_TOKEN}@github.com/EzekialSA/SAPI4-TTS-Docker.git" /tmp/mirror 2>&1 | sed "s|${GH_PAT_TOKEN}|***|g" || true
+          mkdir -p /tmp/mirror
+          git -C /tmp/mirror rev-parse --git-dir >/dev/null 2>&1 || git -C /tmp/mirror init -q
+
+      - name: Strip binaries and stage files
+        run: python3 .gitea/scripts/mirror_prepare.py "$GITHUB_WORKSPACE" /tmp/mirror
+
+      - name: Verify no binaries reached the mirror
+        run: |
+          set -eu
+          found=$(find /tmp/mirror -path /tmp/mirror/.git -prune -o -type f \( -iname '*.exe' -o -iname '*.dll' -o -iname '*.msi' -o -iname '*.bin' \) -print)
+          if [ -n "$found" ]; then
+            echo "::error::binaries present in mirror: $found"
+            exit 1
+          fi
+          count=$(find /tmp/mirror -path /tmp/mirror/.git -prune -o -type f -print | wc -l)
+          echo "clean - $count files, $(du -sh /tmp/mirror | cut -f1)"
+
+      - name: Commit and push
+        env:
+          GH_PAT_TOKEN: ${{ secrets.GH_PAT_TOKEN }}
+          SRC_SHA: ${{ gitea.sha }}
+        run: |
+          set -eu
+          cd /tmp/mirror
+          git config user.email "actions@andrewspolytechnic.com"
+          git config user.name "Gitea Actions"
+          git checkout -q -B main
+          git add -A
+          if git diff --cached --quiet 2>/dev/null; then
+            echo "no changes to mirror"
+            exit 0
+          fi
+          short=$(printf '%s' "$SRC_SHA" | cut -c1-7)
+          printf 'Mirror from gitea @ %s\n\nBinary-free snapshot. The four vendored SAPI4/TruVoice installers are\nreplaced by .txt placeholders linking to their sources.\n' "$short" > /tmp/msg
+          git commit -q -F /tmp/msg
+          git remote remove origin 2>/dev/null || true
+          git remote add origin "https://x-access-token:${GH_PAT_TOKEN}@github.com/EzekialSA/SAPI4-TTS-Docker.git"
+          git push -f origin main 2>&1 | sed "s|${GH_PAT_TOKEN}|***|g"
+          echo "pushed $(git rev-parse --short HEAD)"

@@ -1,0 +1,20 @@
+SAPI4SDK.exe — PLACEHOLDER, NOT THE REAL FILE
+========================================
+
+Microsoft Speech SDK 4.0 (1998). Self-extracting CAB.
+Needed at build time ONLY for speech.h, which lives two CABs
+deep: SAPI4SDK.exe -> spchsdk.exe -> ipeech.h (renamed).
+
+DOWNLOAD FROM:
+  https://github.com/TETYYS/SAPI4
+
+Committed in the TETYYS/SAPI4 repository root.
+
+WHY THIS IS A PLACEHOLDER
+  This public mirror carries no binaries. The original is proprietary
+  Microsoft / Lernout & Hauspie abandonware and is not redistributed here.
+
+TO BUILD
+  Download the file above, save it to `engines/SAPI4SDK.exe` (drop the .txt), and run
+  `docker compose up -d --build`. The Dockerfile expects the real binary at
+  that exact path.

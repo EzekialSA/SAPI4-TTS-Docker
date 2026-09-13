@@ -1,0 +1,20 @@
+tv_enua.exe — PLACEHOLDER, NOT THE REAL FILE
+=======================================
+
+Lernout & Hauspie TruVoice American English TTS Engine (1998).
+Provides the 10 TruVoice voices, including Adult Male #2 —
+the BonziBUDDY voice.
+
+DOWNLOAD FROM:
+  https://github.com/TETYYS/SAPI4
+
+Committed in the TETYYS/SAPI4 repository root.
+
+WHY THIS IS A PLACEHOLDER
+  This public mirror carries no binaries. The original is proprietary
+  Microsoft / Lernout & Hauspie abandonware and is not redistributed here.
+
+TO BUILD
+  Download the file above, save it to `engines/tv_enua.exe` (drop the .txt), and run
+  `docker compose up -d --build`. The Dockerfile expects the real binary at
+  that exact path.

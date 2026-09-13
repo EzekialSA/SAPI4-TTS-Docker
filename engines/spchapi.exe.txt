@@ -1,0 +1,19 @@
+spchapi.exe — PLACEHOLDER, NOT THE REAL FILE
+=======================================
+
+Microsoft Speech API 4.0 runtime (1998). Self-extracting CAB.
+Provides SPEECH.DLL and the TTS enumerator COM server.
+
+DOWNLOAD FROM:
+  https://github.com/TETYYS/SAPI4
+
+Committed in the TETYYS/SAPI4 repository root.
+
+WHY THIS IS A PLACEHOLDER
+  This public mirror carries no binaries. The original is proprietary
+  Microsoft / Lernout & Hauspie abandonware and is not redistributed here.
+
+TO BUILD
+  Download the file above, save it to `engines/spchapi.exe` (drop the .txt), and run
+  `docker compose up -d --build`. The Dockerfile expects the real binary at
+  that exact path.

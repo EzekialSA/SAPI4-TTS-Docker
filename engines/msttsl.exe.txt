@@ -1,0 +1,22 @@
+msttsl.exe — PLACEHOLDER, NOT THE REAL FILE
+======================================
+
+Microsoft Text-to-Speech Engine 4.0 (English), 1998.
+Provides Microsoft Sam, Mary and Mike, the RoboSoft voices,
+Male/Female Whisper and the Hall/Stadium/Space variants.
+
+DOWNLOAD FROM:
+  https://web.archive.org/web/20010414021222if_/http://activex.microsoft.com:80/activex/controls/sapi/msttsl.exe
+
+Originally distributed by Microsoft at activex.microsoft.com;
+that host is long dead, so use the Internet Archive copy.
+Expected size: 7,674,104 bytes.
+
+WHY THIS IS A PLACEHOLDER
+  This public mirror carries no binaries. The original is proprietary
+  Microsoft / Lernout & Hauspie abandonware and is not redistributed here.
+
+TO BUILD
+  Download the file above, save it to `engines/msttsl.exe` (drop the .txt), and run
+  `docker compose up -d --build`. The Dockerfile expects the real binary at
+  that exact path.

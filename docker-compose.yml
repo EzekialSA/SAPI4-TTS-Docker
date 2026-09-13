@@ -1,0 +1,23 @@
+services:
+  sapi4-tts:
+    build:
+      context: .
+    image: sapi4-tts:latest
+    container_name: sapi4-tts
+    restart: unless-stopped
+    ports:
+      - "5000:5000"     # web UI + REST + OpenAI-compatible API
+      - "10200:10200"   # Wyoming protocol (Home Assistant TTS provider)
+    environment:
+      SAPI4_CONCURRENCY: "2"
+      ENABLE_WYOMING: "1"
+      TZ: America/Chicago
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:5000/healthz',timeout=5).status==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
