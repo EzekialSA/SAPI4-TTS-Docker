@@ -223,3 +223,5 @@ engines/             vendored 1998 installers (proprietary abandonware)
 `sapi4.cpp`, `sapi4.hpp`, `sapi4out.cpp`, `sapi4limits.cpp` are TETYYS's, MIT
 (see LICENSE). The bundled Microsoft and Lernout & Hauspie binaries are
 proprietary abandonware, redistributed here for personal archival use.
+
+<!-- mirror trigger test -->
