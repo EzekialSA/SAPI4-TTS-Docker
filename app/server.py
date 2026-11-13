@@ -9,12 +9,16 @@ Surfaces:
   POST /v1/audio/speech         OpenAI-compatible TTS
   GET  /healthz                 health probe
   Wyoming protocol runs on TCP 10200 (wyoming_server.py, same container).
+  Optional: Qwen3-TTS voices, proxied from QWEN_TTS_URL (see README). Off unless configured.
 """
 import asyncio
+import json
 import os
 import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -53,6 +57,23 @@ OPENAI_ALIASES: Dict[str, tuple] = {
 
 VOICES: Dict[str, dict] = {}
 _sem = asyncio.Semaphore(int(os.environ.get("SAPI4_CONCURRENCY", "2")))
+
+# --- optional Qwen3-TTS voices (proxied) -------------------------------------
+# Any OpenAI-compatible TTS server works. Disabled unless BOTH variables are set.
+#   QWEN_TTS_URL     base URL of the server, e.g. http://tts-host.example:8000
+#   QWEN_TTS_VOICES  comma-separated voice names that server knows
+# Pitch and speed are SAPI4 concepts; the UI greys them out for these voices.
+QWEN_TTS_URL = os.environ.get("QWEN_TTS_URL", "").strip().rstrip("/")
+QWEN_TTS_VOICES = [v.strip() for v in os.environ.get("QWEN_TTS_VOICES", "").split(",") if v.strip()]
+QWEN_TTS_MODEL = os.environ.get("QWEN_TTS_MODEL", "qwen3-tts").strip() or "qwen3-tts"
+QWEN_TTS_TIMEOUT = int(os.environ.get("QWEN_TTS_TIMEOUT", "180"))
+QWEN_ENABLED = bool(QWEN_TTS_URL and QWEN_TTS_VOICES)
+if QWEN_TTS_URL and not QWEN_TTS_VOICES:
+    print("[qwen] QWEN_TTS_URL is set but QWEN_TTS_VOICES is empty; Qwen voices disabled", flush=True)
+QWEN_MIME = {"wav": "audio/wav", "mp3": "audio/mpeg", "opus": "audio/ogg",
+             "flac": "audio/flac", "aac": "audio/aac"}
+# A GPU-backed server: one request at a time unless told otherwise.
+_qsem = asyncio.Semaphore(int(os.environ.get("QWEN_TTS_CONCURRENCY", "1")))
 
 app = FastAPI(title="sapi4-tts", version="1.0.0")
 
@@ -159,6 +180,46 @@ async def synth_async(text, voice, pitch, speed) -> bytes:
         return await asyncio.to_thread(synth, text, voice, pitch, speed)
 
 
+def qwen_voice_names() -> list:
+    """Configured Qwen voices, minus any name a SAPI voice already owns (SAPI wins)."""
+    return [v for v in QWEN_TTS_VOICES if QWEN_ENABLED and v not in VOICES]
+
+
+def is_qwen(voice: str) -> bool:
+    return QWEN_ENABLED and voice in QWEN_TTS_VOICES and voice not in VOICES
+
+
+def qwen_synth(text: str, voice: str, fmt: str, speed: float = 1.0) -> tuple:
+    text = (text or "").strip()
+    if not text:
+        raise HTTPException(400, "text is required")
+    if len(text) > 4095:
+        raise HTTPException(400, "text too long (max 4095)")
+    fmt = (fmt or "wav").lower()
+    if fmt not in QWEN_MIME:
+        fmt = "wav"
+    payload = {"model": QWEN_TTS_MODEL, "input": text, "voice": voice, "response_format": fmt}
+    if speed and abs(speed - 1.0) > 0.01:
+        payload["speed"] = speed
+    req = urllib.request.Request(
+        QWEN_TTS_URL + "/v1/audio/speech", data=json.dumps(payload).encode(), method="POST",
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=QWEN_TTS_TIMEOUT) as r:
+            ctype = r.headers.get_content_type()
+            return r.read(), (ctype if ctype.startswith("audio/") else QWEN_MIME[fmt])
+    except urllib.error.HTTPError as e:
+        detail = e.read(300).decode("utf-8", "replace")
+        raise HTTPException(502, f"Qwen TTS returned {e.code}: {detail}") from e
+    except (urllib.error.URLError, OSError) as e:
+        raise HTTPException(502, f"Qwen TTS unreachable ({type(e).__name__})") from e
+
+
+async def qwen_synth_async(text, voice, fmt, speed=1.0):
+    async with _qsem:
+        return await asyncio.to_thread(qwen_synth, text, voice, fmt, speed)
+
+
 def to_format(wav: bytes, fmt: str) -> tuple:
     """Convert WAV via ffmpeg. Falls back to wav when unavailable."""
     fmt = (fmt or "wav").lower()
@@ -182,6 +243,8 @@ def startup():
     global VOICES
     VOICES = load_voices()
     print(f"[sapi4] {len(VOICES)} voices loaded: {list(VOICES)}", flush=True)
+    if QWEN_ENABLED:
+        print(f"[qwen] voices enabled: {qwen_voice_names()}", flush=True)
 
 
 @app.get("/healthz")
@@ -201,7 +264,8 @@ def api_voices():
             item["presetPitch"], item["presetSpeed"] = pre
         out.append(item)
     return {"voices": out,
-            "bonzi": {"voice": BONZI_VOICE, "pitch": BONZI_PITCH, "speed": BONZI_SPEED}}
+            "bonzi": {"voice": BONZI_VOICE, "pitch": BONZI_PITCH, "speed": BONZI_SPEED},
+            "qwen": [{"name": n} for n in qwen_voice_names()]}
 
 
 @app.get("/api/tts")
@@ -209,6 +273,9 @@ async def api_tts(text: str = Query(..., min_length=1),
                   voice: str = Query(BONZI_VOICE),
                   pitch: Optional[int] = None, speed: Optional[int] = None,
                   format: str = "wav"):
+    if is_qwen(voice):  # pitch/speed do not apply to Qwen voices
+        data, mime = await qwen_synth_async(text, voice, format)
+        return Response(content=data, media_type=mime)
     wav = await synth_async(text, voice, pitch, speed)
     data, mime = to_format(wav, format)
     return Response(content=data, media_type=mime)
@@ -241,6 +308,9 @@ class SpeechRequest(BaseModel):
 async def openai_speech(req: SpeechRequest):
     """OpenAI-compatible. HA's OpenAI TTS integration talks to this."""
     key = req.voice.strip()
+    if is_qwen(key):
+        data, mime = await qwen_synth_async(req.input, key, req.response_format, req.speed)
+        return Response(content=data, media_type=mime)
     if key in VOICES:
         voice, pitch, speed = key, None, None
     else:
@@ -289,6 +359,7 @@ INDEX_HTML = """<!doctype html>
  .lim{color:#404040;font-size:11px}
  audio{width:100%;margin-top:12px}
  #status{margin-left:6px;font-size:12px}
+ input:disabled{background:#c0c0c0;color:#808080}
 </style></head><body><div class="win">
 <h1>Microsoft Sam &amp; friends &mdash; SAPI 4.0</h1>
 <div class="row"><label>Select voice:</label><select id="voice"></select></div>
@@ -306,37 +377,53 @@ INDEX_HTML = """<!doctype html>
 <audio id="player" controls></audio>
 </div>
 <script>
-let V={},B=null;
+let V={},Q={},B=null;
+const $=id=>document.getElementById(id);
+function isQ(n){return !!Q[n];}
 async function init(){
   const j=await (await fetch('api/voices')).json();
-  B=j.bonzi; const sel=document.getElementById('voice');
+  B=j.bonzi; const sel=$('voice');
+  const g1=document.createElement('optgroup');g1.label='SAPI 4.0';
   j.voices.forEach(v=>{V[v.name]=v;const o=document.createElement('option');
-    o.value=v.name;o.textContent=v.name;sel.appendChild(o);});
+    o.value=v.name;o.textContent=v.name;g1.appendChild(o);});
+  sel.appendChild(g1);
+  const qs=j.qwen||[];
+  if(qs.length){const g2=document.createElement('optgroup');g2.label='Qwen3-TTS';
+    qs.forEach(v=>{Q[v.name]=v;const o=document.createElement('option');
+      o.value=v.name;o.textContent=v.name;g2.appendChild(o);});
+    sel.appendChild(g2);}
   sel.onchange=()=>fill(sel.value);
   if(V[B.voice]){sel.value=B.voice;fill(B.voice);
-    document.getElementById('pitch').value=B.pitch;
-    document.getElementById('speed').value=B.speed;}
+    $('pitch').value=B.pitch;$('speed').value=B.speed;}
   else if(j.voices.length){sel.value=j.voices[0].name;fill(j.voices[0].name);}
 }
-function fill(n){const v=V[n];if(!v)return;
-  document.getElementById('pitch').value=(v.presetPitch!==undefined)?v.presetPitch:v.defPitch;
-  document.getElementById('speed').value=(v.presetSpeed!==undefined)?v.presetSpeed:v.defSpeed;
-  document.getElementById('plim').textContent='('+v.minPitch+'\\u2013'+v.maxPitch+')';
-  document.getElementById('slim').textContent='('+v.minSpeed+'\\u2013'+v.maxSpeed+')';}
-function bonzi(){document.getElementById('voice').value=B.voice;fill(B.voice);
-  document.getElementById('pitch').value=B.pitch;
-  document.getElementById('speed').value=B.speed;}
-function url(){const p=new URLSearchParams({text:document.getElementById('text').value,
-  voice:document.getElementById('voice').value,
-  pitch:document.getElementById('pitch').value,
-  speed:document.getElementById('speed').value});return 'api/tts?'+p;}
-async function say(){const s=document.getElementById('status');s.textContent='generating\\u2026';
+function setQ(on){
+  ['pitch','speed'].forEach(k=>{$(k).disabled=on;});
+  if(on){$('pitch').value='';$('speed').value='';
+    $('plim').textContent='(not used by Qwen)';$('slim').textContent='(not used by Qwen)';}
+}
+function fill(n){
+  if(isQ(n)){setQ(true);return;}
+  setQ(false);
+  const v=V[n];if(!v)return;
+  $('pitch').value=(v.presetPitch!==undefined)?v.presetPitch:v.defPitch;
+  $('speed').value=(v.presetSpeed!==undefined)?v.presetSpeed:v.defSpeed;
+  $('plim').textContent='('+v.minPitch+'-'+v.maxPitch+')';
+  $('slim').textContent='('+v.minSpeed+'-'+v.maxSpeed+')';}
+function bonzi(){$('voice').value=B.voice;fill(B.voice);
+  $('pitch').value=B.pitch;$('speed').value=B.speed;}
+function url(){const voice=$('voice').value;
+  const p=new URLSearchParams({text:$('text').value,voice:voice});
+  if(!isQ(voice)){p.set('pitch',$('pitch').value);p.set('speed',$('speed').value);}
+  return 'api/tts?'+p;}
+async function say(){const s=$('status');s.textContent='generating...';
   try{const r=await fetch(url());
     if(!r.ok){s.textContent='error: '+await r.text();return;}
-    const b=await r.blob();const pl=document.getElementById('player');
+    const b=await r.blob();const pl=$('player');
     pl.src=URL.createObjectURL(b);pl.play();s.textContent='';}
   catch(e){s.textContent='error: '+e;}}
-function dl(){const a=document.createElement('a');a.href=url();a.download='sapi4.wav';a.click();}
+function dl(){const a=document.createElement('a');a.href=url();
+  a.download=(isQ($('voice').value)?'qwen':'sapi4')+'.wav';a.click();}
 init();
 </script></body></html>
 """

@@ -167,6 +167,37 @@ useful for generating files. For playback, prefer `tts.speak`.
 | Integration won't connect | Wyoming is raw TCP on 10200; not proxied, not HTTPS |
 | Pitch override ignored | Separator is `\|`, not `#` |
 
+## Optional: Qwen3-TTS voices
+
+The web UI and REST/OpenAI endpoints can also serve voices from an
+OpenAI-compatible TTS server such as a Qwen3-TTS voice-cloning service. Nothing
+changes unless **both** variables are set:
+
+| Variable | Meaning |
+|---|---|
+| `QWEN_TTS_URL` | Base URL of the TTS server, e.g. `http://tts-host.example:8000` |
+| `QWEN_TTS_VOICES` | Comma-separated voice names that server knows, e.g. `voice-a,voice-b` |
+| `QWEN_TTS_MODEL` | Model name sent upstream (default `qwen3-tts`) |
+| `QWEN_TTS_TIMEOUT` | Seconds to wait for the upstream (default `180`) |
+| `QWEN_TTS_CONCURRENCY` | Simultaneous upstream requests (default `1`) |
+
+```yaml
+environment:
+  QWEN_TTS_URL: "http://tts-host.example:8000"
+  QWEN_TTS_VOICES: "voice-a,voice-b"
+```
+
+- The voices appear in their own group in the web UI. Pitch and speed are SAPI 4
+  settings, so those fields are greyed out for them.
+- `GET /api/tts?voice=voice-a&text=...` and `POST /v1/audio/speech` work with
+  these names. `format=` accepts `wav`, `mp3`, `opus`, `flac`, `aac`.
+- A name that is also a SAPI 4 voice stays a SAPI 4 voice.
+- `GET /api/voices` keeps its existing `voices` list unchanged and adds a
+  separate `qwen` list.
+- Wyoming (Home Assistant) still exposes only the SAPI 4 voices.
+- The upstream server must be reachable from this container. Nothing is proxied
+  unless the name is in `QWEN_TTS_VOICES`.
+
 ## How it works
 
 1. **Build stage** — `mingw-w64` cross-compiles TETYYS's C++ COM shims

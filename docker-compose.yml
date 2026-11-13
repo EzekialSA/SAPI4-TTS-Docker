@@ -11,6 +11,9 @@ services:
     environment:
       SAPI4_CONCURRENCY: "2"
       ENABLE_WYOMING: "1"
+      # Optional: add Qwen3-TTS voices from any OpenAI-compatible TTS server.
+      # QWEN_TTS_URL: "http://tts-host.example:8000"
+      # QWEN_TTS_VOICES: "voice-a,voice-b"
       TZ: America/Chicago
     tmpfs:
       - /tmp
